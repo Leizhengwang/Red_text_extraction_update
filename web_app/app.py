@@ -38,6 +38,68 @@ ALLOWED_EXTENSIONS = {'pdf'}
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def debug_pdf_colors(pdf_path):
+    """DEBUG: Analyze ALL colors in the PDF to see what's actually there"""
+    print(f"\n{'='*80}")
+    print(f"🔬 DEBUG: Analyzing ALL colors in PDF")
+    print(f"{'='*80}")
+    
+    try:
+        doc = fitz.open(pdf_path)
+        all_colors = set()
+        color_samples = {}
+        
+        for page_num in range(min(3, doc.page_count)):  # Check first 3 pages
+            print(f"\n📄 Page {page_num + 1}:")
+            text_blocks = doc[page_num].get_text("dict", flags=fitz.TEXTFLAGS_TEXT)["blocks"]
+            
+            for block in text_blocks:
+                if "lines" not in block:
+                    continue
+                    
+                for line in block["lines"]:
+                    for span in line["spans"]:
+                        text = span["text"].strip()
+                        if not text:
+                            continue
+                        
+                        color = fitz.sRGB_to_rgb(span["color"])
+                        all_colors.add(color)
+                        
+                        # Store sample text for each color
+                        if color not in color_samples:
+                            color_samples[color] = text[:30]
+        
+        doc.close()
+        
+        print(f"\n🎨 Found {len(all_colors)} unique colors:")
+        for color in sorted(all_colors):
+            r, g, b = color
+            sample = color_samples.get(color, "")
+            
+            # Check if it's red-ish
+            is_red = r > 150 and r > (g + 50) and r > (b + 50)
+            is_target = color == (218, 31, 51)
+            
+            indicator = ""
+            if is_target:
+                indicator = "🎯 TARGET RED!"
+            elif is_red:
+                indicator = "🔴 RED-ISH"
+            
+            print(f"  RGB{color} - \"{sample}\" {indicator}")
+        
+        print(f"{'='*80}\n")
+        
+        # Return True if target red color found
+        return (218, 31, 51) in all_colors
+        
+    except Exception as e:
+        print(f"❌ ERROR in debug_pdf_colors: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
 def extract_red_pdf_contents(pdf_path, original_filename=None):
     """Extract red content from PDF and return temp PDF path - V20 Logic"""
     print(f"\n{'='*60}")
@@ -48,8 +110,23 @@ def extract_red_pdf_contents(pdf_path, original_filename=None):
     print(f"📊 File size: {os.path.getsize(pdf_path) if os.path.exists(pdf_path) else 'N/A'} bytes")
     print(f"{'='*60}\n")
     
-    doc = fitz.open(pdf_path)
-    print(f"📖 PDF opened successfully. Pages: {doc.page_count}")
+    try:
+        # 🔬 DEBUG: First, analyze what colors are actually in the PDF
+        has_target_red = debug_pdf_colors(pdf_path)
+        if has_target_red:
+            print("✅ Target red color RGB(218, 31, 51) FOUND in PDF")
+        else:
+            print("⚠️  WARNING: Target red color RGB(218, 31, 51) NOT FOUND in PDF")
+            print("   The PDF may use a different red color!")
+        
+        doc = fitz.open(pdf_path)
+        print(f"📖 PDF opened successfully. Pages: {doc.page_count}")
+        print(f"📖 PyMuPDF version: {fitz.version}")
+    except Exception as e:
+        print(f"❌ ERROR opening PDF: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
     
     # Configuration
     dpi_resol = 380
@@ -58,6 +135,10 @@ def extract_red_pdf_contents(pdf_path, original_filename=None):
     # Create new PDF for red content
     new_pdf = fitz.open()
     red_content_found = False  # Track if any red content was found
+    red_blocks_count = 0  # Count red text blocks
+    pages_with_red = 0  # Count pages with red content
+    
+    print(f"🔍 Starting to scan {doc.page_count} pages for red text...")
     
     for page_num in range(doc.page_count):
         page_has_redtable = False
@@ -97,9 +178,12 @@ def extract_red_pdf_contents(pdf_path, original_filename=None):
                         else:
                             if not page_flag:
                                 print(f"🔴 Red text found on page {page_num + 1}: '{text[:50]}'")
+                                print(f"   Color: RGB{color}, Font: {font_name}, Size: {font_size}")
                                 page_flag = True
+                                pages_with_red += 1
                             block_flag = True
                             red_content_found = True  # Mark that we found red content
+                            red_blocks_count += 1
                             
                             # Handle tables with red text
                             if ((font_size == 9 and font_name == "TimesNewRomanPSMT") or 
@@ -252,18 +336,25 @@ def extract_red_pdf_contents(pdf_path, original_filename=None):
     # Save to temporary PDF file (required for image extraction)
     temp_pdf_path = os.path.join(app.config['OUTPUT_FOLDER'], f"temp_red_{uuid.uuid4().hex}.pdf")
     
-    print(f"\n{'='*60}")
+    print(f"\n{'='*80}")
+    print(f"📊 EXTRACTION SUMMARY:")
+    print(f"   • Total pages scanned: {doc.page_count}")
+    print(f"   • Pages with red content: {pages_with_red}")
+    print(f"   • Red text blocks found: {red_blocks_count}")
+    print(f"   • Output PDF pages: {len(new_pdf)}")
+    
     if red_content_found:
-        print(f"✅ Red content extraction SUCCESSFUL")
-        print(f"📄 Created temp PDF with {len(new_pdf)} pages")
+        print(f"\n✅ Red content extraction SUCCESSFUL")
+        print(f"� Temp PDF: {temp_pdf_path}")
+        print(f"📦 File size: {os.path.getsize(temp_pdf_path) if os.path.exists(temp_pdf_path) else 0} bytes")
     else:
-        print(f"⚠️  WARNING: No red text content found in PDF!")
-        print(f"   This could mean:")
-        print(f"   • The PDF doesn't contain red text")
-        print(f"   • The red color doesn't match RGB(218, 31, 51)")
-        print(f"   • The text is embedded as images")
-    print(f"💾 Temp PDF: {temp_pdf_path}")
-    print(f"{'='*60}\n")
+        print(f"\n⚠️  WARNING: No red text content found in PDF!")
+        print(f"   Possible reasons:")
+        print(f"   1. The PDF doesn't contain text with RGB(218, 31, 51)")
+        print(f"   2. The red color is slightly different (check debug output above)")
+        print(f"   3. The text is embedded as images rather than text")
+        print(f"   4. PDF encoding issue (file corruption or format problem)")
+    print(f"{'='*80}\n")
     
     new_pdf.save(temp_pdf_path)
     new_pdf.close()
