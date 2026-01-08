@@ -394,6 +394,7 @@ def upload_files():
                 filename = secure_filename(file.filename)
                 temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{job_id}_{filename}")
                 file.save(temp_path)
+                print(f"✅ Saved upload: {temp_path} ({os.path.getsize(temp_path)} bytes)")
                 uploaded_files.append({
                     'filename': filename,
                     'path': temp_path
@@ -403,13 +404,20 @@ def upload_files():
         if not hasattr(app, 'jobs'):
             app.jobs = {}
         
-        app.jobs[job_id] = {
+        job_data = {
             'files': uploaded_files,
             'total': len(uploaded_files),
             'processed': 0,
             'results': [],
             'status': 'pending'
         }
+        app.jobs[job_id] = job_data
+        
+        # ALSO save to disk for persistence across restarts
+        job_file = os.path.join(app.config['OUTPUT_FOLDER'], f"job_{job_id}.json")
+        with open(job_file, 'w') as f:
+            json.dump(job_data, f)
+        print(f"💾 Job saved to disk: {job_file}")
         
         return jsonify({
             'success': True,
@@ -419,12 +427,27 @@ def upload_files():
         })
     
     except Exception as e:
+        print(f"❌ Upload error: {str(e)}")
         return jsonify({'error': f'Upload failed: {str(e)}'}), 500
 
 @app.route('/process/<job_id>', methods=['POST'])
 def process_job(job_id):
-    if not hasattr(app, 'jobs') or job_id not in app.jobs:
-        return jsonify({'error': 'Job not found'}), 404
+    # Try to load job from memory first, then from disk
+    if not hasattr(app, 'jobs'):
+        app.jobs = {}
+    
+    if job_id not in app.jobs:
+        # Try loading from disk
+        job_file = os.path.join(app.config['OUTPUT_FOLDER'], f"job_{job_id}.json")
+        if os.path.exists(job_file):
+            print(f"📂 Loading job from disk: {job_file}")
+            with open(job_file, 'r') as f:
+                app.jobs[job_id] = json.load(f)
+        else:
+            print(f"❌ Job not found: {job_id}")
+            print(f"   Checked memory: {list(app.jobs.keys())}")
+            print(f"   Checked disk: {job_file}")
+            return jsonify({'error': 'Job not found'}), 404
     
     job = app.jobs[job_id]
     job['status'] = 'processing'
@@ -473,6 +496,12 @@ def process_job(job_id):
         
         job['status'] = 'completed'
         
+        # Save updated job to disk
+        job_file = os.path.join(app.config['OUTPUT_FOLDER'], f"job_{job_id}.json")
+        with open(job_file, 'w') as f:
+            json.dump(job, f)
+        print(f"💾 Job completed and saved: {job_file}")
+        
         return jsonify({
             'success': True,
             'job_id': job_id,
@@ -481,14 +510,33 @@ def process_job(job_id):
         })
     
     except Exception as e:
+        print(f"❌ Processing error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         job['status'] = 'failed'
         job['error'] = str(e)
+        
+        # Save failed job to disk
+        job_file = os.path.join(app.config['OUTPUT_FOLDER'], f"job_{job_id}.json")
+        with open(job_file, 'w') as f:
+            json.dump(job, f)
+        
         return jsonify({'error': f'Processing failed: {str(e)}'}), 500
 
 @app.route('/progress/<job_id>')
 def get_progress(job_id):
-    if not hasattr(app, 'jobs') or job_id not in app.jobs:
-        return jsonify({'error': 'Job not found'}), 404
+    # Try to load job from memory first, then from disk
+    if not hasattr(app, 'jobs'):
+        app.jobs = {}
+    
+    if job_id not in app.jobs:
+        # Try loading from disk
+        job_file = os.path.join(app.config['OUTPUT_FOLDER'], f"job_{job_id}.json")
+        if os.path.exists(job_file):
+            with open(job_file, 'r') as f:
+                app.jobs[job_id] = json.load(f)
+        else:
+            return jsonify({'error': 'Job not found'}), 404
     
     job = app.jobs[job_id]
     return jsonify({
