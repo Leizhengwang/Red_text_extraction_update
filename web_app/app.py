@@ -16,105 +16,40 @@ import json
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key-here'
 
-# Use absolute paths for upload and output folders
+# Use environment variables for paths (Azure-compatible)
+# Default to /tmp for Azure App Service which is writable
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-app.config['UPLOAD_FOLDER'] = os.path.join(BASE_DIR, 'uploads')
-app.config['OUTPUT_FOLDER'] = os.path.join(BASE_DIR, 'output')
+app.config['UPLOAD_FOLDER'] = os.getenv('UPLOAD_FOLDER', os.path.join(BASE_DIR, 'uploads'))
+app.config['OUTPUT_FOLDER'] = os.getenv('OUTPUT_FOLDER', os.path.join(BASE_DIR, 'output'))
 app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024 * 1024  # 5GB max total upload size
 
 # Ensure upload and output directories exist
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
 
-# Log directory information for debugging
-print(f"\n{'='*60}")
-print("Application Configuration:")
-print(f"BASE_DIR: {BASE_DIR}")
-print(f"UPLOAD_FOLDER: {app.config['UPLOAD_FOLDER']}")
-print(f"OUTPUT_FOLDER: {app.config['OUTPUT_FOLDER']}")
-print(f"Upload folder exists: {os.path.exists(app.config['UPLOAD_FOLDER'])}")
-print(f"Output folder exists: {os.path.exists(app.config['OUTPUT_FOLDER'])}")
-print(f"Upload folder writable: {os.access(app.config['UPLOAD_FOLDER'], os.W_OK)}")
-print(f"Output folder writable: {os.access(app.config['OUTPUT_FOLDER'], os.W_OK)}")
-print(f"{'='*60}\n")
+# Log the paths for debugging
+print(f"📁 UPLOAD_FOLDER: {app.config['UPLOAD_FOLDER']}")
+print(f"📁 OUTPUT_FOLDER: {app.config['OUTPUT_FOLDER']}")
+print(f"✅ Upload folder writable: {os.access(app.config['UPLOAD_FOLDER'], os.W_OK)}")
+print(f"✅ Output folder writable: {os.access(app.config['OUTPUT_FOLDER'], os.W_OK)}")
 
 ALLOWED_EXTENSIONS = {'pdf'}
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def is_red_color(rgb_tuple, tolerance=50):
-    """
-    Check if a color is red with flexible tolerance.
-    Returns True if the color is predominantly red.
-    
-    Args:
-        rgb_tuple: Tuple of (R, G, B) values (0-255)
-        tolerance: How much variation to allow in G and B values
-    """
-    r, g, b = rgb_tuple
-    
-    # Red should be significantly higher than green and blue
-    # Common red colors:
-    # (255, 0, 0) - Pure red
-    # (218, 31, 51) - Your specific red
-    # (220, 20, 60) - Crimson
-    # (255, 69, 0) - Red-Orange
-    
-    # Check if it's a red-ish color:
-    # 1. Red component should be high (> 150)
-    # 2. Red should be significantly more than green and blue
-    # 3. Green and blue should be relatively low
-    
-    if r > 150 and r > (g + tolerance) and r > (b + tolerance):
-        return True
-    
-    # Also check for the specific red color mentioned
-    if rgb_tuple == (218, 31, 51):
-        return True
-    
-    return False
-
-def analyze_pdf_colors(pdf_path):
-    """Debug function to analyze all colors in PDF"""
-    doc = fitz.open(pdf_path)
-    colors_found = set()
-    
-    for page_num in range(doc.page_count):
-        text_blocks = doc[page_num].get_text("dict", flags=fitz.TEXTFLAGS_TEXT)["blocks"]
-        
-        for block in text_blocks:
-            if "lines" in block:
-                for line in block["lines"]:
-                    for span in line["spans"]:
-                        color = fitz.sRGB_to_rgb(span["color"])
-                        text = span["text"].strip()
-                        if text:  # Only count non-empty text
-                            colors_found.add((color, text[:20]))  # Store color and sample text
-    
-    doc.close()
-    
-    print("\n=== PDF Color Analysis ===")
-    print(f"Found {len(colors_found)} unique color/text combinations:")
-    for color, sample_text in sorted(colors_found):
-        r, g, b = color
-        is_red = is_red_color(color)
-        red_indicator = "🔴 RED" if is_red else ""
-        print(f"RGB{color} - \"{sample_text}\" {red_indicator}")
-    print("========================\n")
-    
-    return colors_found
-
 def extract_red_pdf_contents(pdf_path, original_filename=None):
     """Extract red content from PDF and return temp PDF path - V20 Logic"""
-    
-    # Debug: Analyze all colors in the PDF first
     print(f"\n{'='*60}")
-    print(f"Analyzing PDF: {original_filename or pdf_path}")
-    print(f"{'='*60}")
-    analyze_pdf_colors(pdf_path)
+    print(f"🔍 Starting red text extraction")
+    print(f"📄 File: {original_filename or pdf_path}")
+    print(f"📁 Source: {pdf_path}")
+    print(f"📁 File exists: {os.path.exists(pdf_path)}")
+    print(f"📊 File size: {os.path.getsize(pdf_path) if os.path.exists(pdf_path) else 'N/A'} bytes")
+    print(f"{'='*60}\n")
     
     doc = fitz.open(pdf_path)
+    print(f"📖 PDF opened successfully. Pages: {doc.page_count}")
     
     # Configuration
     dpi_resol = 380
@@ -122,6 +57,7 @@ def extract_red_pdf_contents(pdf_path, original_filename=None):
     
     # Create new PDF for red content
     new_pdf = fitz.open()
+    red_content_found = False  # Track if any red content was found
     
     for page_num in range(doc.page_count):
         page_has_redtable = False
@@ -155,14 +91,15 @@ def extract_red_pdf_contents(pdf_path, original_filename=None):
                     level_font_dict.add((font_size, font_name))
                     
                     # Red color text detection
-                    if is_red_color(color):
+                    if color == (218, 31, 51):
                         if text == "•" or text == "●" or text == "∙" or text == "–":
                             continue
                         else:
                             if not page_flag:
-                                print(f"page numer: {page_num + 1}")
+                                print(f"🔴 Red text found on page {page_num + 1}: '{text[:50]}'")
                                 page_flag = True
                             block_flag = True
+                            red_content_found = True  # Mark that we found red content
                             
                             # Handle tables with red text
                             if ((font_size == 9 and font_name == "TimesNewRomanPSMT") or 
@@ -191,7 +128,7 @@ def extract_red_pdf_contents(pdf_path, original_filename=None):
                                                                 for ln in blk["lines"]:
                                                                     for sp in ln["spans"]:
                                                                         clr = fitz.sRGB_to_rgb(sp["color"])
-                                                                        if is_red_color(clr):
+                                                                        if clr == (218, 31, 51):
                                                                             has_red_text = True
                                                                             break
                                                                     if has_red_text:
@@ -314,6 +251,20 @@ def extract_red_pdf_contents(pdf_path, original_filename=None):
     
     # Save to temporary PDF file (required for image extraction)
     temp_pdf_path = os.path.join(app.config['OUTPUT_FOLDER'], f"temp_red_{uuid.uuid4().hex}.pdf")
+    
+    print(f"\n{'='*60}")
+    if red_content_found:
+        print(f"✅ Red content extraction SUCCESSFUL")
+        print(f"📄 Created temp PDF with {len(new_pdf)} pages")
+    else:
+        print(f"⚠️  WARNING: No red text content found in PDF!")
+        print(f"   This could mean:")
+        print(f"   • The PDF doesn't contain red text")
+        print(f"   • The red color doesn't match RGB(218, 31, 51)")
+        print(f"   • The text is embedded as images")
+    print(f"💾 Temp PDF: {temp_pdf_path}")
+    print(f"{'='*60}\n")
+    
     new_pdf.save(temp_pdf_path)
     new_pdf.close()
     doc.close()
@@ -484,35 +435,15 @@ def process_job(job_id):
             temp_path = file_info['path']
             base_name = filename.rsplit('.', 1)[0]
             
-            print(f"\n{'='*60}")
-            print(f"Processing file {idx + 1}/{len(job['files'])}: {filename}")
-            print(f"File path: {temp_path}")
-            print(f"File exists: {os.path.exists(temp_path)}")
-            print(f"File size: {os.path.getsize(temp_path) if os.path.exists(temp_path) else 0} bytes")
-            print(f"{'='*60}\n")
-            
             # Update current file being processed (1-based index for display)
             job['current_file'] = filename
             job['current_index'] = idx + 1  # 1-based index for user display
             
             # Extract red content from PDF file (returns temp PDF path)
-            print(f"Starting red text extraction for: {filename}")
             temp_red_pdf_path = extract_red_pdf_contents(temp_path, filename)
-            print(f"Red text extraction completed. Temp PDF: {temp_red_pdf_path}")
-            print(f"Temp PDF exists: {os.path.exists(temp_red_pdf_path)}")
-            print(f"Temp PDF size: {os.path.getsize(temp_red_pdf_path) if os.path.exists(temp_red_pdf_path) else 0} bytes")
             
             # Extract images from processed PDF (deletes temp PDF after)
-            print(f"Extracting images from temp PDF...")
             images = extract_images_with_positions(temp_red_pdf_path)
-            print(f"Extracted {len(images)} images")
-            
-            if len(images) == 0:
-                print("⚠️  WARNING: No images/red content found in PDF!")
-                print("This could mean:")
-                print("  1. The PDF has no red text")
-                print("  2. The red color doesn't match expected values")
-                print("  3. Text is embedded as images")
             
             # Create Word document with simple filename
             # Use base_name directly, limit length for display
