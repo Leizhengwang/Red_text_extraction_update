@@ -375,3 +375,7 @@ az webapp config container set \
 **Date:** January 8, 2026  
 **Status:** Ready for Deployment 🚀  
 **Confidence:** High - These are standard Azure App Service fixes
+
+
+## 1, local need output, input folder, test python, not in azure
+## 2 ,  app.py.  {}

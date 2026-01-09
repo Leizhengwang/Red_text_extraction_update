@@ -38,14 +38,14 @@ ALLOWED_EXTENSIONS = {'pdf'}
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def debug_pdf_colors(pdf_path):
+def debug_pdf_colors(pdf_data):
     """DEBUG: Analyze ALL colors in the PDF to see what's actually there"""
     print(f"\n{'='*80}")
     print(f"🔬 DEBUG: Analyzing ALL colors in PDF")
     print(f"{'='*80}")
     
     try:
-        doc = fitz.open(pdf_path)
+        doc = fitz.open(stream=pdf_data, filetype="pdf")
         all_colors = set()
         color_samples = {}
         
@@ -100,26 +100,24 @@ def debug_pdf_colors(pdf_path):
         traceback.print_exc()
         return False
 
-def extract_red_pdf_contents(pdf_path, original_filename=None):
-    """Extract red content from PDF and return temp PDF path - V20 Logic"""
+def extract_red_pdf_contents(pdf_data, original_filename=None):
+    """Extract red content from PDF and return processed PDF data - MEMORY-BASED (Azure-compatible)"""
     print(f"\n{'='*60}")
     print(f"🔍 Starting red text extraction")
-    print(f"📄 File: {original_filename or pdf_path}")
-    print(f"📁 Source: {pdf_path}")
-    print(f"📁 File exists: {os.path.exists(pdf_path)}")
-    print(f"📊 File size: {os.path.getsize(pdf_path) if os.path.exists(pdf_path) else 'N/A'} bytes")
+    print(f"📄 File: {original_filename or 'unknown'}")
+    print(f"� PDF data size: {len(pdf_data)} bytes")
     print(f"{'='*60}\n")
     
     try:
         # 🔬 DEBUG: First, analyze what colors are actually in the PDF
-        has_target_red = debug_pdf_colors(pdf_path)
+        has_target_red = debug_pdf_colors(pdf_data)
         if has_target_red:
             print("✅ Target red color RGB(218, 31, 51) FOUND in PDF")
         else:
             print("⚠️  WARNING: Target red color RGB(218, 31, 51) NOT FOUND in PDF")
             print("   The PDF may use a different red color!")
         
-        doc = fitz.open(pdf_path)
+        doc = fitz.open(stream=pdf_data, filetype="pdf")
         print(f"📖 PDF opened successfully. Pages: {doc.page_count}")
         print(f"📖 PyMuPDF version: {fitz.version}")
     except Exception as e:
@@ -189,7 +187,7 @@ def extract_red_pdf_contents(pdf_path, original_filename=None):
                             if ((font_size == 9 and font_name == "TimesNewRomanPSMT") or 
                                 (font_size == 12 and font_name == "Arial-ItalicMT" and (text == "2024" or text == "2025"))) and (not tableposted_flag):
                                 try:
-                                    with pdfplumber.open(pdf_path) as pdf:
+                                    with pdfplumber.open(BytesIO(pdf_data)) as pdf:
                                         for page_number, page in enumerate(pdf.pages, start=1):
                                             if page_number == page_num + 1:
                                                 tables = page.find_tables()
