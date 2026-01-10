@@ -1,7 +1,6 @@
 # ABS Rules Red Text Extractor
 
 A professional web application for extracting red-highlighted text from ABS (American Bureau of Shipping) rule PDF documents and converting them into editable Word documents.
-
 ## Features
 
 🔍 **Advanced Red Text Detection** - Automatically identifies and extracts red-highlighted content from PDF documents  

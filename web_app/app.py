@@ -551,8 +551,14 @@ def process_job(job_id):
             job['current_file'] = filename
             job['current_index'] = idx + 1  # 1-based index for user display
             
-            # Extract red content from PDF file (returns temp PDF path)
-            temp_red_pdf_path = extract_red_pdf_contents(temp_path, filename)
+            # 🔥 FIX: Read PDF file into memory (Azure-compatible)
+            print(f"📖 Reading PDF from: {temp_path}")
+            with open(temp_path, 'rb') as f:
+                pdf_data = f.read()
+            print(f"✅ PDF loaded into memory: {len(pdf_data)} bytes")
+            
+            # Extract red content from PDF data (returns temp PDF path)
+            temp_red_pdf_path = extract_red_pdf_contents(pdf_data, filename)
             
             # Extract images from processed PDF (deletes temp PDF after)
             images = extract_images_with_positions(temp_red_pdf_path)

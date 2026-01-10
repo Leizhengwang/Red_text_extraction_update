@@ -7,19 +7,110 @@ The red text extraction app works locally with Flask but fails on Azure App Serv
 "Processing failed: Job not found"
 ```
 
-## Root Cause Analysis
-When an app works locally but fails on Azure, the issue is typically:
-1. **File system permissions** - Azure App Service has read-only filesystem except `/tmp` and `/home`
-2. **Missing write permissions** - `uploads/` and `output/` folders can't be written to
-3. **Non-root user conflicts** - Docker non-root users can cause permission issues in Azure
-4. **Insufficient logging** - Hard to debug without detailed logs
-5. **Lost in-memory data** - Azure restarts containers, losing job tracking data stored in `app.jobs = {}`
+## Root Cause - CONFIRMED ✅
+
+**Critical Bug: Function Signature Mismatch**
+
+After comparing the working `web_app old copy` with the failing `web_appCopy/web_app`, the root cause is **NOT** just about memory vs file paths - it's a **FUNCTION CALL BUG**:
+
+### 🔴 **THE ACTUAL BUG (Line 551 in app.py):**
+```python
+# In /process/<job_id> endpoint:
+temp_path = file_info['path']  # This is a STRING file path
+temp_red_pdf_path = extract_red_pdf_contents(temp_path, filename)  # ❌ WRONG!
+```
+
+### ✅ **Function expects BYTES, not file path:**
+```python
+def extract_red_pdf_contents(pdf_data, original_filename=None):
+    """Extract red content from PDF and return processed PDF data - MEMORY-BASED"""
+    doc = fitz.open(stream=pdf_data, filetype="pdf")  # Expects BYTES!
+```
+
+**Passing a file path string to `fitz.open(stream=...)` causes it to FAIL!**
+
+### 📊 **Comparison:**
+
+| Version | Upload Flow | Processing | Works? |
+|---------|-------------|------------|--------|
+| **Old Copy (Working)** | `/upload` reads `file.read()` → passes bytes to `extract_red_pdf_contents(pdf_data)` → Processes immediately | ✅ Synchronous, in-memory | ✅ Yes |
+| **New Copy (Broken)** | `/upload` saves `file.save(temp_path)` → `/process` calls `extract_red_pdf_contents(temp_path)` ❌ | ❌ Async, but **passes file path instead of bytes** | ❌ No |
+| **New Copy (FIXED)** | `/upload` saves `file.save(temp_path)` → `/process` reads file → calls `extract_red_pdf_contents(pdf_data)` ✅ | ✅ Async, in-memory processing | ✅ Yes |
+
+### 🔧 **The Fix:**
+```python
+# Read the file into memory before calling the function
+with open(temp_path, 'rb') as f:
+    pdf_data = f.read()
+temp_red_pdf_path = extract_red_pdf_contents(pdf_data, filename)  # ✅ CORRECT!
+```
+
+### Why This Matters:
+1. **Function signature changed** - You updated `extract_red_pdf_contents` to use memory-based processing
+2. **Forgot to update caller** - The `/process` endpoint still passed file paths
+3. **Type mismatch** - PyMuPDF's `fitz.open(stream=...)` expects bytes, not string
+4. **Silent failure on Azure** - Error gets caught but doesn't show the real issue
+5. **Works differently locally** - Local has different error handling/permissions
 
 ---
 
 ## Changes Made
 
-### 1. **Dockerfile Changes** (`web_app/Dockerfile`)
+### 1. **PRIMARY FIX: Memory-Based PDF Processing** (`web_app/app.py`)
+
+#### ❌ **BEFORE (File-Based Approach):**
+```python
+@app.route('/upload', methods=['POST'])
+def upload():
+    file = request.files.get('file')
+    filename = str(uuid.uuid4()) + "_" + secure_filename(file.filename)
+    pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    file.save(pdf_path)  # ❌ Save to disk
+    
+    # Pass file path to extraction
+    job_id = str(uuid.uuid4())
+    app.jobs[job_id] = {'status': 'pending', 'file_path': pdf_path}
+    threading.Thread(target=process_pdf, args=(job_id, pdf_path)).start()
+
+def extract_red_pdf_contents(pdf_path, original_filename=None):
+    doc = fitz.open(pdf_path)  # ❌ Open from file system
+    # ... extraction logic ...
+```
+
+#### ✅ **AFTER (Memory-Based Approach):**
+```python
+@app.route('/upload', methods=['POST'])
+def upload():
+    file = request.files.get('file')
+    filename = str(uuid.uuid4()) + "_" + secure_filename(file.filename)
+    
+    # Read PDF into memory instead of saving to disk
+    pdf_data = file.read()  # ✅ Read into memory
+    
+    job_id = str(uuid.uuid4())
+    app.jobs[job_id] = {
+        'status': 'pending',
+        'pdf_data': pdf_data,  # ✅ Store in memory
+        'filename': filename
+    }
+    threading.Thread(target=process_pdf, args=(job_id,)).start()
+
+def extract_red_pdf_contents(pdf_data, original_filename=None):
+    # Open PDF from memory bytes
+    doc = fitz.open(stream=pdf_data, filetype="pdf")  # ✅ Open from memory
+    # ... extraction logic ...
+```
+
+#### **Key Changes:**
+1. ✅ **Changed** `file.save(pdf_path)` → `pdf_data = file.read()`
+2. ✅ **Changed** `fitz.open(pdf_path)` → `fitz.open(stream=pdf_data, filetype="pdf")`
+3. ✅ **Changed** `pdfplumber.open(pdf_path)` → `pdfplumber.open(BytesIO(pdf_data))`
+4. ✅ **Updated** all function signatures to pass `pdf_data` instead of `pdf_path`
+5. ✅ **No more disk I/O** for PDF reading - all in-memory processing
+
+---
+
+### 2. **Dockerfile Changes** (`web_app/Dockerfile`)
 
 #### ❌ **BEFORE:**
 ```dockerfile
@@ -118,9 +209,60 @@ print(f"✅ Upload folder writable: {os.access(app.config['UPLOAD_FOLDER'], os.W
 print(f"✅ Output folder writable: {os.access(app.config['OUTPUT_FOLDER'], os.W_OK)}")
 ```
 
-#### **Added: Detailed Logging in `extract_red_pdf_contents()`**
+---
+
+### 3. **Enhanced Logging** (`web_app/app.py`)
+
+#### **Added: Comprehensive Debug Logging**
 ```python
-def extract_red_pdf_contents(pdf_path, original_filename=None):
+# Startup logging
+print(f"📁 UPLOAD_FOLDER: {app.config['UPLOAD_FOLDER']}")
+print(f"📁 OUTPUT_FOLDER: {app.config['OUTPUT_FOLDER']}")
+print(f"✅ Upload folder writable: {os.access(app.config['UPLOAD_FOLDER'], os.W_OK)}")
+print(f"✅ Output folder writable: {os.access(app.config['OUTPUT_FOLDER'], os.W_OK)}")
+
+# Color detection logging
+def extract_red_pdf_contents(pdf_data, original_filename=None):
+    print(f"\n{'='*60}")
+    print(f"🔍 Starting red text extraction")
+    print(f"📄 File: {original_filename}")
+    print(f"📊 PDF size: {len(pdf_data)} bytes")
+    print(f"{'='*60}\n")
+    
+    doc = fitz.open(stream=pdf_data, filetype="pdf")
+    print(f"📖 PDF opened successfully. Pages: {doc.page_count}")
+    
+    for page_num in range(doc.page_count):
+        page = doc.load_page(page_num)
+        blocks = page.get_text("dict")["blocks"]
+        print(f"\n📄 Page {page_num + 1}: {len(blocks)} blocks found")
+        
+        for block in blocks:
+            if block.get('type') == 0:  # Text block
+                for line in block.get('lines', []):
+                    for span in line.get('spans', []):
+                        color = span.get('color')
+                        rgb = ((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF)
+                        
+                        if rgb == (218, 31, 51):  # Red text
+                            print(f"🔴 Red text found on page {page_num + 1}")
+                            print(f"   Text: '{span.get('text', '')[:50]}'")
+                            print(f"   RGB: {rgb}")
+    
+    print(f"\n✅ Extraction complete")
+    print(f"🔴 Red content found: {red_content_found}")
+    print(f"{'='*60}\n")
+```
+
+#### **Benefits:**
+- Shows exactly when and where red text is detected
+- Logs PDF size, page count, and block counts
+- Helps debug Azure-specific issues
+- Tracks the entire extraction pipeline
+
+---
+
+### 4. **Configuration Updates** (`web_app/app.py`)
     """Extract red content from PDF and return temp PDF path - V20 Logic"""
     print(f"\n{'='*60}")
     print(f"🔍 Starting red text extraction")
@@ -379,3 +521,5 @@ az webapp config container set \
 
 ## 1, local need output, input folder, test python, not in azure
 ## 2 ,  app.py.  {}
+## 3. **Critical Issue: File Path vs In-Memory Processing**
+
