@@ -170,7 +170,7 @@ def extract_red_pdf_contents(pdf_data, original_filename=None):
                     level_font_dict.add((font_size, font_name))
                     
                     # Red color text detection
-                    if color == (218, 31, 51):
+                    if color == (217, 31, 51) or color == (218, 31, 51):
                         if text == "•" or text == "●" or text == "∙" or text == "–":
                             continue
                         else:
