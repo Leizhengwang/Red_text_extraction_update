@@ -760,15 +760,18 @@ def add_security_headers(response):
     return response
 
 if __name__ == '__main__':
+    # Use environment variable for port, default to 5001 (5000 often conflicts with AirPlay)
+    port = int(os.getenv('FLASK_PORT', 5001))
+    
     print(f"\n{'='*60}")
     print(f"🚀 Application Starting")
     print(f"{'='*60}")
     print(f"📁 Upload Folder: {app.config['UPLOAD_FOLDER']}")
     print(f"📁 Output Folder: {app.config['OUTPUT_FOLDER']}")
     print(f"🌐 Server running at:")
-    print(f"   - Local: http://127.0.0.1:5000")
-    print(f"   - Network: http://10.240.34.164:5000")
+    print(f"   - Local: http://127.0.0.1:{port}")
+    print(f"   - Network: http://10.240.34.164:{port}")
     print(f"")
-    print(f"💡 TIP: Use http://127.0.0.1:5000 for better browser compatibility")
+    print(f"💡 TIP: Use http://127.0.0.1:{port} for better browser compatibility")
     print(f"{'='*60}\n")
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=port)
